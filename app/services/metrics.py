@@ -1,25 +1,31 @@
+# app/services/metrics.py
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
-from app.models import Tweet, Domain, TweetDomain
+from sqlalchemy import text
 
-def summary(db: Session) -> dict:
-    total = db.query(func.count(Tweet.id)).scalar() or 0
-    by_type = dict(db.query(Tweet.type, func.count(Tweet.id)).group_by(Tweet.type).all())
+def summary(db: Session):
+    # Total tweets
+    total_tweets = db.execute(text("SELECT COUNT(*) FROM tweets")).scalar()
 
-    # emoji-only replies (approx): text comprised solely of non-BMP unicode (emojis)
-    emoji_only = db.execute(
-        text(r"SELECT COUNT(*) FROM tweets WHERE type='reply' AND text ~ '^[\x{10000}-\x{10FFFF}]+$'")
-    ).scalar() or 0
+    # Replies only
+    replies = db.execute(text("SELECT COUNT(*) FROM tweets WHERE type='reply'")).scalar()
 
-    top_domains = db.query(Domain.host, func.count(TweetDomain.tweet_id)) \
-        .join(TweetDomain, Domain.id==TweetDomain.domain_id) \
-        .group_by(Domain.host) \
-        .order_by(func.count(TweetDomain.tweet_id).desc()) \
-        .limit(10).all()
+    # Emoji-only replies (safe regex: counts replies with non-ASCII chars)
+    emoji_only_replies = db.execute(
+        text("SELECT COUNT(*) FROM tweets WHERE type='reply' AND text ~ '[^\\x00-\\x7F]'")
+    ).scalar()
+
+    # Retweets
+    retweets = db.execute(text("SELECT COUNT(*) FROM tweets WHERE type='retweet'")).scalar()
+
+    # Domains from URLs
+    domains = db.execute(
+        text("SELECT domain, COUNT(*) FROM tweet_domains GROUP BY domain ORDER BY COUNT(*) DESC LIMIT 10")
+    ).fetchall()
 
     return {
-        "total_tweets": total,
-        "by_type": by_type,
-        "emoji_only_replies": emoji_only,
-        "top_domains": [{"host": h, "count": c} for h,c in top_domains],
+        "total_tweets": total_tweets,
+        "replies": replies,
+        "emoji_only_replies": emoji_only_replies,
+        "retweets": retweets,
+        "top_domains": [{"domain": d[0], "count": d[1]} for d in domains],
     }
